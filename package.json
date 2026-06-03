@@ -6,10 +6,16 @@
   "bin": {
     "ai-stack": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/cli.js",
+    "test": "node --test",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

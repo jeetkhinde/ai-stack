@@ -4,7 +4,7 @@ import { Command } from "commander";
 import { execa } from "execa";
 import ora, { type Ora } from "ora";
 import pc from "picocolors";
-import { confirm, select } from "@inquirer/prompts";
+import { confirm } from "@inquirer/prompts";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -43,6 +43,11 @@ interface ToolInstaller {
   displayName: string;
   /** The binary name to look for on PATH. */
   binary: string;
+  /**
+   * The package name used for installation.
+   * May differ from displayName (e.g. graphify installs from PyPI package "graphifyy").
+   */
+  packageName: string;
   /** Whether the tool supports project-local installation. */
   supportsLocal: boolean;
   /** Build install command for global scope. `pythonPM` is set when available. */
@@ -51,12 +56,24 @@ interface ToolInstaller {
   installLocal?: () => StepDefinition;
 }
 
+interface PreflightResult {
+  /** Tools that were already on PATH. */
+  found: string[];
+  /** Tools that remain missing after any install attempt. */
+  stillMissing: string[];
+  /** Whether auto-install was attempted. */
+  installAttempted: boolean;
+}
+
 // ─── Installable Tool Registry ───────────────────────────────────────────────
+// Single source of truth: displayName, binary, packageName, and install logic.
+// Note: graphify's PyPI package is "graphifyy" (double-y) to avoid a name conflict.
 
 const INSTALLABLE_TOOLS: ToolInstaller[] = [
   {
     displayName: "codebase-memory-mcp",
     binary: "codebase-memory-mcp",
+    packageName: "codebase-memory-mcp",
     supportsLocal: false,
     installGlobal: () => ({
       label: "Installing codebase-memory-mcp (npm)",
@@ -67,6 +84,7 @@ const INSTALLABLE_TOOLS: ToolInstaller[] = [
   {
     displayName: "code-review-graph",
     binary: "code-review-graph",
+    packageName: "code-review-graph",
     supportsLocal: false,
     installGlobal: (pm) => {
       if (!pm) return null;
@@ -81,20 +99,22 @@ const INSTALLABLE_TOOLS: ToolInstaller[] = [
   {
     displayName: "graphify",
     binary: "graphify",
+    packageName: "graphifyy",  // PyPI package name differs from binary name
     supportsLocal: false,
     installGlobal: (pm) => {
       if (!pm) return null;
       const cmds: Record<PythonPM, StepDefinition> = {
-        uv:   { label: "Installing graphify (uv)",   command: "uv",   args: ["tool", "install", "graphifyy"] },
-        pipx: { label: "Installing graphify (pipx)", command: "pipx", args: ["install", "graphifyy"] },
-        pip:  { label: "Installing graphify (pip)",  command: "pip",  args: ["install", "graphifyy"] },
+        uv:   { label: "Installing graphify (uv) — pkg: graphifyy",   command: "uv",   args: ["tool", "install", "graphifyy"] },
+        pipx: { label: "Installing graphify (pipx) — pkg: graphifyy", command: "pipx", args: ["install", "graphifyy"] },
+        pip:  { label: "Installing graphify (pip) — pkg: graphifyy",  command: "pip",  args: ["install", "graphifyy"] },
       };
       return cmds[pm];
     },
   },
   {
     displayName: "echovault (memory)",
-    binary: "memory",
+    binary: "memory",          // CLI binary name differs from package name
+    packageName: "echovault",
     supportsLocal: false,
     installGlobal: (pm) => {
       if (!pm) return null;
@@ -227,9 +247,9 @@ async function checkPrerequisites(): Promise<boolean> {
 
 /**
  * Scan for missing installable tools and offer to install them.
- * Returns list of tools that are still missing after the install attempt.
+ * Returns structured result so the caller can decide whether to proceed.
  */
-async function preflightAndInstall(autoYes: boolean): Promise<void> {
+async function preflightAndInstall(autoYes: boolean): Promise<PreflightResult> {
   const spinner = ora({ text: "Scanning for installed tools…", color: "blue" }).start();
 
   const pythonPM = await detectPythonPM();
@@ -261,14 +281,17 @@ async function preflightAndInstall(autoYes: boolean): Promise<void> {
   if (missing.length === 0) {
     console.log();
     console.log(pc.green(pc.bold("  All tools are already installed!")));
-    return;
+    return { found, stillMissing: [], installAttempted: false };
   }
 
   // ── Show missing tools ──────────────────────────────────────────────────
   console.log();
   console.log(pc.yellow(pc.bold("  ⚠  Missing tools:")));
   for (const tool of missing) {
-    console.log(pc.yellow(`     • ${tool.displayName}`));
+    const pkgNote = tool.packageName !== tool.binary
+      ? pc.dim(` (pkg: ${tool.packageName}, binary: ${tool.binary})`)
+      : "";
+    console.log(pc.yellow(`     • ${tool.displayName}${pkgNote}`));
   }
   console.log();
 
@@ -283,33 +306,31 @@ async function preflightAndInstall(autoYes: boolean): Promise<void> {
 
   if (!shouldInstall) {
     console.log(pc.dim("  Skipping auto-install. You can install them manually later."));
-    return;
+    return {
+      found,
+      stillMissing: missing.map((t) => t.displayName),
+      installAttempted: false,
+    };
   }
 
-  // ── Determine scope for tools that support local install ────────────────
-  // (Currently none of the binary tools support local — this is for future use
-  //  and for caveman which is handled separately in Phase A via npx skills)
-
+  // ── Run installs ────────────────────────────────────────────────────────
   console.log();
   console.log(pc.bold(pc.magenta("  Installing missing tools…")));
   console.log(pc.dim("  ────────────────────────────────────"));
 
-  const installResults: StepResult[] = [];
-
   for (const tool of missing) {
     const step = tool.installGlobal(pythonPM);
     if (!step) {
-      const spinner = ora({ text: `Installing ${tool.displayName}`, color: "cyan" }).start();
-      spinner.warn(
+      const s = ora({ text: `Installing ${tool.displayName}`, color: "cyan" }).start();
+      s.warn(
         pc.yellow(
           `${tool.displayName} — ${pc.dim("no suitable package manager found (need uv, pipx, or pip)")}`
         )
       );
-      installResults.push({ label: tool.displayName, success: false, error: "No package manager" });
       continue;
     }
 
-    installResults.push(await runStep(step));
+    await runStep(step);
   }
 
   // ── Re-verify installations ─────────────────────────────────────────────
@@ -335,6 +356,8 @@ async function preflightAndInstall(autoYes: boolean): Promise<void> {
       pc.dim("  You may need to restart your terminal or add the install directory to PATH.")
     );
   }
+
+  return { found, stillMissing, installAttempted: true };
 }
 
 // ─── Step Definitions ────────────────────────────────────────────────────────
@@ -371,7 +394,11 @@ function buildSetupSteps(autoYes: boolean): StepDefinition[] {
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
-function printSummary(results: StepResult[]): void {
+/**
+ * Print a summary of step results.
+ * Returns the number of failed steps (used to set exit code).
+ */
+function printSummary(results: StepResult[]): number {
   const passed = results.filter((r) => r.success).length;
   const failed = results.filter((r) => !r.success).length;
 
@@ -381,7 +408,7 @@ function printSummary(results: StepResult[]): void {
   console.log(pc.bold("━".repeat(50)));
   console.log(`  ${pc.green("✔")} Passed: ${pc.green(String(passed))}`);
   if (failed > 0) {
-    console.log(`  ${pc.yellow("⚠")} Warned: ${pc.yellow(String(failed))}`);
+    console.log(`  ${pc.yellow("⚠")} Failed: ${pc.yellow(String(failed))}`);
   }
   console.log(pc.bold("━".repeat(50)));
   console.log();
@@ -391,17 +418,20 @@ function printSummary(results: StepResult[]): void {
   } else {
     console.log(
       pc.yellow(
-        `  ⚠  ${failed} step(s) completed with warnings. Review output above.`
+        `  ⚠  ${failed} step(s) failed. Review output above.`
       )
     );
   }
   console.log();
+
+  return failed;
 }
 
 // ─── Init Command ────────────────────────────────────────────────────────────
 
-async function initCommand(opts: { yes?: boolean }): Promise<void> {
+async function initCommand(opts: { yes?: boolean; allowWarnings?: boolean }): Promise<void> {
   const autoYes = opts.yes ?? false;
+  const allowWarnings = opts.allowWarnings ?? false;
 
   console.log();
   console.log(
@@ -421,11 +451,44 @@ async function initCommand(opts: { yes?: boolean }): Promise<void> {
 
   // ── Prerequisites ───────────────────────────────────────────────────────
   if (!(await checkPrerequisites())) {
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   // ── Pre-flight & Auto-Install ───────────────────────────────────────────
-  await preflightAndInstall(autoYes);
+  const preflight = await preflightAndInstall(autoYes);
+
+  // Abort if critical tools are still missing after install attempt
+  if (preflight.stillMissing.length > 0 && preflight.installAttempted) {
+    console.log();
+    console.log(
+      pc.red(
+        pc.bold("  ✘  Cannot proceed — required tools are still missing after install attempt:")
+      )
+    );
+    for (const name of preflight.stillMissing) {
+      console.log(pc.red(`     • ${name}`));
+    }
+    console.log();
+    console.log(
+      pc.dim("  Fix your PATH or install the tools manually, then re-run `ai-stack init`.")
+    );
+    console.log();
+    process.exitCode = 1;
+    return;
+  }
+
+  // If user declined install and tools are missing, warn but continue
+  // (the individual steps will fail gracefully with warnings)
+  if (preflight.stillMissing.length > 0 && !preflight.installAttempted) {
+    console.log();
+    console.log(
+      pc.yellow(
+        pc.bold("  ⚠  Continuing with missing tools — some steps will fail.")
+      )
+    );
+    console.log();
+  }
 
   // ── Execute setup steps ─────────────────────────────────────────────────
   const steps = buildSetupSteps(autoYes);
@@ -456,8 +519,12 @@ async function initCommand(opts: { yes?: boolean }): Promise<void> {
     results.push(await runStep(step));
   }
 
-  // ── Summary ─────────────────────────────────────────────────────────────
-  printSummary(results);
+  // ── Summary & Exit Code ─────────────────────────────────────────────────
+  const failedCount = printSummary(results);
+
+  if (failedCount > 0 && !allowWarnings) {
+    process.exitCode = 1;
+  }
 }
 
 // ─── CLI Program ─────────────────────────────────────────────────────────────
@@ -477,6 +544,7 @@ program
     "Initialise all AI & dev-workflow tools in the current working directory."
   )
   .option("-y, --yes", "Skip all prompts — auto-install missing tools globally")
+  .option("--allow-warnings", "Exit 0 even if some steps fail (default: exit 1 on failures)")
   .action(initCommand);
 
 program.parse(process.argv);

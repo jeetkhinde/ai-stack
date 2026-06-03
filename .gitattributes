@@ -1,0 +1,20 @@
+# graphify: union-merge graph.json to prevent merge conflicts
+graphify-out/graph.json merge=graphify-union
+
+# graphify: mark generated output as linguist-generated (hide in PR diffs)
+graphify-out/** linguist-generated=true
+graphify-out/GRAPH_REPORT.md linguist-generated=true
+
+# code-review-graph: exclude from language stats
+.code-review-graph/** linguist-generated=true
+.github/code-review-graph.instruction.md linguist-generated=true
+
+# AI agent configs: exclude from language stats and PR diffs
+.agent/** linguist-generated=true
+.agents/** linguist-generated=true
+AGENTS.md linguist-generated=true
+CLAUDE.md linguist-generated=true
+GEMINI.md linguist-generated=true
+QODER.md linguist-generated=true
+skills-lock.json linguist-generated=true
+

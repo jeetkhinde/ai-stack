@@ -106,6 +106,38 @@ test("managed hygiene preserves project instructions and shareable config", () =
   assert.equal(attributes.some((line) => line.includes("merge=")), false);
 });
 
+test("setup contains only the supported standard tools", () => {
+  const steps = buildSetupSteps(true);
+  const ignored = GITIGNORE_GROUPS.flatMap((group) => group.entries);
+
+  assert.deepEqual(
+    steps.slice(0, 4).map((step) => step.command),
+    ["codebase-memory-mcp", "npx", "code-review-graph", "memory"]
+  );
+  assert.deepEqual(ignored, [
+    ".code-review-graph/",
+    "graphify-out/",
+    ".memory/",
+  ]);
+});
+
+test("graphify integrations target only the supported agent toolchain", () => {
+  const integrationSteps = buildSetupSteps(true).filter(
+    (step) => step.label.startsWith("Integrating graphify -> ")
+  );
+
+  assert.deepEqual(
+    integrationSteps.map((step) => step.args[0]),
+    ["codex", "gemini", "antigravity", "claude"]
+  );
+  assert.equal(
+    integrationSteps.some((step) =>
+      ["qoder", "opencode", "kiro", "cursor", "windsurf"].includes(step.args[0])
+    ),
+    false
+  );
+});
+
 test("package metadata requires a supported Node version", () => {
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 

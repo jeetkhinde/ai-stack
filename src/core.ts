@@ -27,7 +27,6 @@ const AI_PLATFORMS = [
   "codex",
   "gemini",
   "antigravity",
-  "opencode",
   "claude",
 ] as const;
 
@@ -46,10 +45,6 @@ export const GITIGNORE_GROUPS: readonly ManagedGroup[] = [
   {
     comment: "# echovault local memory index",
     entries: [".memory/"],
-  },
-  {
-    comment: "# caveman local settings",
-    entries: [".cave/"],
   },
 ];
 
@@ -155,21 +150,6 @@ export function buildSetupSteps(autoYes: boolean): StepDefinition[] {
       label: "Initialising superpowers",
       command: "npx",
       args: ["-y", "antigravity-superpowers", "init", ...superForce],
-    },
-    {
-      label: "Installing caveman skill",
-      command: "npx",
-      args: [
-        "-y",
-        "skills",
-        "add",
-        "JuliusBrussee/caveman",
-        "--yes",
-        "--agent",
-        "*",
-        "--skill",
-        "*",
-      ],
     },
     {
       label: "Initialising code-review-graph",

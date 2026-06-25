@@ -531,7 +531,7 @@ async function initCommand(opts: { yes?: boolean; allowWarnings?: boolean }): Pr
   console.log();
   console.log(pc.bold(pc.blue("  Phase A: Standard Tools")));
   console.log(pc.dim("  ────────────────────────────────────"));
-  for (const step of steps.slice(0, 5)) {
+  for (const step of steps.slice(0, 4)) {
     results.push(await runStep(step));
   }
 
@@ -540,7 +540,7 @@ async function initCommand(opts: { yes?: boolean; allowWarnings?: boolean }): Pr
   console.log(pc.bold(pc.blue("  Phase B: Graphify Hooks")));
   console.log(pc.dim("  ────────────────────────────────────"));
   results.push(await ensureGitRepo());
-  for (const step of steps.slice(5, 6)) {
+  for (const step of steps.slice(4, 5)) {
     results.push(await runStep(step));
   }
 
@@ -555,7 +555,7 @@ async function initCommand(opts: { yes?: boolean; allowWarnings?: boolean }): Pr
   console.log();
   console.log(pc.bold(pc.blue("  Phase D: AI Integrations")));
   console.log(pc.dim("  ────────────────────────────────────"));
-  for (const step of steps.slice(6)) {
+  for (const step of steps.slice(5)) {
     results.push(await runStep(step));
   }
 

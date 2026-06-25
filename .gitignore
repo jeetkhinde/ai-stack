@@ -19,6 +19,3 @@ graphify-out/
 
 # echovault local memory index
 .memory/
-
-# caveman local settings
-.cave/

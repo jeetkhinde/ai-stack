@@ -28,17 +28,19 @@ export interface AgentDefinition {
 export const AGENT_REGISTRY: readonly AgentDefinition[] = [
   // ── Standard preset ────────────────────────────────────────────────────
   { id: "opencode",    displayName: "OpenCode",       codeReviewGraphPlatform: "opencode",    graphifyPlatform: "opencode",    inStandardPreset: true },
-  { id: "antigravity", displayName: "Antigravity",    codeReviewGraphPlatform: "antigravity", graphifyPlatform: "antigravity", inStandardPreset: true },
-  { id: "claude",      displayName: "Claude Code",    codeReviewGraphPlatform: "claude",      graphifyPlatform: "claude",      inStandardPreset: true },
-  { id: "codex",       displayName: "Codex CLI",      codeReviewGraphPlatform: "codex",       graphifyPlatform: "codex",       inStandardPreset: true },
-  { id: "gemini-cli",  displayName: "Gemini CLI",     codeReviewGraphPlatform: "gemini-cli",  graphifyPlatform: "gemini",      inStandardPreset: true },
 
   // ── Extended agents ────────────────────────────────────────────────────
+  { id: "antigravity", displayName: "Antigravity",    codeReviewGraphPlatform: "antigravity", graphifyPlatform: "antigravity", inStandardPreset: false },
+  { id: "claude",      displayName: "Claude Code",    codeReviewGraphPlatform: "claude",      graphifyPlatform: "claude",      inStandardPreset: false },
+  { id: "codex",       displayName: "Codex CLI",      codeReviewGraphPlatform: "codex",       graphifyPlatform: "codex",       inStandardPreset: false },
+  { id: "gemini-cli",  displayName: "Gemini CLI",     codeReviewGraphPlatform: "gemini-cli",  graphifyPlatform: "gemini",      inStandardPreset: false },
   { id: "aider",       displayName: "Aider",          codeReviewGraphPlatform: null,           graphifyPlatform: "aider",       inStandardPreset: false },
   { id: "continue",    displayName: "Continue",       codeReviewGraphPlatform: "continue",     graphifyPlatform: null,          inStandardPreset: false },
   { id: "copilot",     displayName: "GitHub Copilot", codeReviewGraphPlatform: "copilot",      graphifyPlatform: "copilot",     inStandardPreset: false },
   { id: "cursor",      displayName: "Cursor",         codeReviewGraphPlatform: "cursor",       graphifyPlatform: "cursor",      inStandardPreset: false },
+  { id: "hermes",      displayName: "Hermes",         codeReviewGraphPlatform: null,           graphifyPlatform: "hermes",      inStandardPreset: false },
   { id: "kiro",        displayName: "Kiro",           codeReviewGraphPlatform: "kiro",         graphifyPlatform: "kiro",        inStandardPreset: false },
+  { id: "pi",          displayName: "Pi.dev",         codeReviewGraphPlatform: null,           graphifyPlatform: "pi",          inStandardPreset: false },
   { id: "qoder",       displayName: "Qoder",          codeReviewGraphPlatform: "qoder",        graphifyPlatform: null,          inStandardPreset: false },
   { id: "windsurf",    displayName: "Windsurf",       codeReviewGraphPlatform: "windsurf",     graphifyPlatform: null,          inStandardPreset: false },
   { id: "zed",         displayName: "Zed",            codeReviewGraphPlatform: "zed",          graphifyPlatform: null,          inStandardPreset: false },

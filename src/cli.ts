@@ -17,7 +17,6 @@ import {
   shouldSetFailureExitCode,
   TOOL_REGISTRY,
   defaultToolIds,
-  type SetupPlan,
   type StepDefinition,
   type StepResult,
 } from "./core.js";
@@ -342,6 +341,45 @@ function ensureGitattributes(dryRun: boolean): StepResult {
   }
 }
 
+/**
+ * Ensure .git/hooks/post-commit runs memory reindex in the background.
+ */
+function ensureMemoryGitHook(dryRun: boolean): StepResult {
+  if (dryRun) {
+    console.log(`  ${pc.dim("○")} Would configure memory git hook`);
+    return { label: "Memory git hook", success: true };
+  }
+
+  const hookPath = join(process.cwd(), ".git", "hooks", "post-commit");
+  const spinner = ora({ text: "Configuring memory git hook", color: "cyan" }).start();
+
+  try {
+    if (!existsSync(join(process.cwd(), ".git", "hooks"))) {
+      spinner.succeed(pc.yellow("Memory git hook — skipped (no .git/hooks directory)"));
+      return { label: "Memory git hook", success: true };
+    }
+
+    const command = "memory reindex > /dev/null 2>&1 &";
+    let content = existsSync(hookPath) ? readFileSync(hookPath, "utf-8") : "#!/bin/sh\n";
+
+    if (!content.includes("memory reindex")) {
+      content = content.endsWith("\n") ? content + command + "\n" : content + "\n" + command + "\n";
+      writeFileSync(hookPath, content, "utf-8");
+    }
+
+    import("node:fs").then(fs => {
+      try { fs.chmodSync(hookPath, 0o755); } catch {}
+    });
+
+    spinner.succeed(pc.green("Memory git hook configured"));
+    return { label: "Memory git hook", success: true };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    spinner.warn(pc.yellow(`Memory git hook — ${pc.dim(message)}`));
+    return { label: "Memory git hook", success: false, error: message };
+  }
+}
+
 // ─── Pre-flight & Auto-Install ───────────────────────────────────────────────
 
 /**
@@ -620,7 +658,7 @@ async function resolveToolSelection(
  * Print a summary of step results.
  * Returns the number of failed steps (used to set exit code).
  */
-function printSummary(results: StepResult[], quiet: boolean): number {
+function printSummary(results: StepResult[]): number {
   const passed = results.filter((r) => r.success).length;
   const failed = results.filter((r) => !r.success).length;
 
@@ -800,16 +838,19 @@ async function initCommand(opts: InitOptions): Promise<void> {
     }
   }
 
-  // ── Phase B: Graphify Hooks ────────────────────────────────────────────
-  if (plan.graphifyHookSteps.length > 0) {
+  // ── Phase B: Git Hooks ────────────────────────────────────────────
+  if (plan.graphifyHookSteps.length > 0 || selectedToolIds.includes("echovault")) {
     if (!quiet) {
       console.log();
-      console.log(pc.bold(pc.blue(`  Phase B: Graphify Hooks${dryRun ? " (DRY RUN)" : ""}`)));
+      console.log(pc.bold(pc.blue(`  Phase B: Git Hooks${dryRun ? " (DRY RUN)" : ""}`)));
       console.log(pc.dim("  ────────────────────────────────────"));
     }
     results.push(await ensureGitRepo(dryRun));
     for (const step of plan.graphifyHookSteps) {
       results.push(dryRun ? dryRunStep(step) : await runStep(step, verbose));
+    }
+    if (selectedToolIds.includes("echovault")) {
+      results.push(ensureMemoryGitHook(dryRun));
     }
   }
 
@@ -835,7 +876,7 @@ async function initCommand(opts: InitOptions): Promise<void> {
   }
 
   // ── Summary & Exit Code ─────────────────────────────────────────────────
-  const failedCount = printSummary(results, quiet);
+  const failedCount = printSummary(results);
 
   if (shouldSetFailureExitCode(failedCount, allowWarnings)) {
     process.exitCode = 1;

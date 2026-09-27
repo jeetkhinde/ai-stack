@@ -44,6 +44,10 @@ export const MANAGED_BLOCK_HEADER =
 
 export const GITIGNORE_GROUPS: readonly ManagedGroup[] = [
   {
+    comment: "# Security and hygiene (do not commit to history)",
+    entries: [".env", ".env.*", "*.log", ".DS_Store", "node_modules/", "coverage/"],
+  },
+  {
     comment: "# code-review-graph local database",
     entries: [".code-review-graph/"],
   },
@@ -58,6 +62,14 @@ export const GITIGNORE_GROUPS: readonly ManagedGroup[] = [
 ];
 
 export const GITATTRIBUTES_GROUPS: readonly ManagedGroup[] = [
+  {
+    comment: "# Security and hygiene (prevent accidental export)",
+    entries: [
+      ".env* export-ignore",
+      "*.log export-ignore",
+      ".DS_Store export-ignore",
+    ],
+  },
   {
     comment: "# Generated knowledge graph output",
     entries: [

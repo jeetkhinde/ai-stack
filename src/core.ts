@@ -1,44 +1,43 @@
-export interface StepDefinition {
-  label: string;
-  command: string;
-  args: string[];
+import type {
+  StepDefinition,
+  StepResult,
+  ManagedGroup,
+  ManagedMergeResult,
+  GitRepoStatus,
+} from "./types.js";
+
+import type { AgentDefinition } from "./agents.js";
+
+export type {
+  StepDefinition,
+  StepResult,
+  ManagedGroup,
+  ManagedMergeResult,
+  GitRepoStatus,
+};
+
+// ─── Tool Registry ───────────────────────────────────────────────────────────
+// Selectable tools that ai-stack can configure per-project.
+
+export interface ToolDefinition {
+  id: string;
+  displayName: string;
+  description: string;
+  defaultEnabled: boolean;
 }
 
-export interface StepResult {
-  label: string;
-  success: boolean;
-  error?: string;
+export const TOOL_REGISTRY: readonly ToolDefinition[] = [
+  { id: "code-review-graph", displayName: "code-review-graph", description: "AI-powered code review",   defaultEnabled: true },
+  { id: "graphify",          displayName: "graphify",          description: "Knowledge graph + git hooks", defaultEnabled: true },
+  { id: "echovault",         displayName: "echovault",         description: "Persistent memory",           defaultEnabled: true },
+  { id: "codebase-memory",   displayName: "codebase-memory-mcp", description: "MCP code indexer",         defaultEnabled: true },
+];
+
+export function defaultToolIds(): string[] {
+  return TOOL_REGISTRY.filter((t) => t.defaultEnabled).map((t) => t.id);
 }
 
-export interface ManagedGroup {
-  comment: string;
-  entries: readonly string[];
-}
-
-export interface ManagedMergeResult {
-  content: string;
-  changed: boolean;
-  addedEntries: number;
-}
-
-export type GitRepoStatus = "detected" | "initialized" | "failed";
-
-const AI_PLATFORMS = [
-  "codex",
-  "gemini",
-  "antigravity",
-  "claude",
-] as const;
-
-const CODE_REVIEW_GRAPH_PLATFORMS = [
-  "codex",
-  "gemini-cli",
-  "antigravity",
-  "claude",
-] as const;
-
-export const STANDARD_TOOL_STEP_COUNT =
-  CODE_REVIEW_GRAPH_PLATFORMS.length + 1;
+// ─── Constants ───────────────────────────────────────────────────────────────
 
 export const MANAGED_BLOCK_HEADER =
   "# === ai-stack managed - do not remove this block ===";
@@ -67,6 +66,8 @@ export const GITATTRIBUTES_GROUPS: readonly ManagedGroup[] = [
     ],
   },
 ];
+
+// ─── Managed Block Merge ─────────────────────────────────────────────────────
 
 function exactLines(content: string): Set<string> {
   return new Set(
@@ -120,6 +121,8 @@ export function mergeManagedBlock(
   };
 }
 
+// ─── Git Repo Step ───────────────────────────────────────────────────────────
+
 export function gitRepoStepResult(
   status: GitRepoStatus,
   error?: string
@@ -140,6 +143,8 @@ export function gitRepoStepResult(
   };
 }
 
+// ─── Exit Code ───────────────────────────────────────────────────────────────
+
 export function shouldSetFailureExitCode(
   failedCount: number,
   allowWarnings: boolean
@@ -147,11 +152,118 @@ export function shouldSetFailureExitCode(
   return failedCount > 0 && !allowWarnings;
 }
 
+// ─── Setup Plan ──────────────────────────────────────────────────────────────
+// Replaces the old `buildSetupSteps()` with a structured plan driven by
+// user-selected agents and tools.
+
+export interface SetupPlan {
+  /** Phase A: code-review-graph init + echovault init */
+  standardToolSteps: StepDefinition[];
+  /** Phase B: graphify git hooks */
+  graphifyHookSteps: StepDefinition[];
+  /** Phase D: graphify <platform> install for each agent */
+  integrationSteps: StepDefinition[];
+}
+
+export interface BuildPlanOptions {
+  autoYes: boolean;
+  selectedAgents: AgentDefinition[];
+  selectedTools: string[];
+}
+
+/**
+ * Build a structured setup plan based on user selections.
+ */
+export function buildSetupPlan(options: BuildPlanOptions): SetupPlan {
+  const { autoYes, selectedAgents, selectedTools } = options;
+  const reviewGraphYes = autoYes ? ["-y"] : [];
+
+  const hasCRG = selectedTools.includes("code-review-graph");
+  const hasGraphify = selectedTools.includes("graphify");
+  const hasEchovault = selectedTools.includes("echovault");
+
+  // Phase A: Standard tool steps
+  const standardToolSteps: StepDefinition[] = [];
+
+  if (hasCRG) {
+    for (const agent of selectedAgents) {
+      if (agent.codeReviewGraphPlatform) {
+        standardToolSteps.push({
+          label: `Initialising code-review-graph -> ${agent.codeReviewGraphPlatform}`,
+          command: "code-review-graph",
+          args: ["init", "--platform", agent.codeReviewGraphPlatform, ...reviewGraphYes],
+        });
+      }
+    }
+  }
+
+  if (hasEchovault) {
+    standardToolSteps.push({
+      label: "Initialising echovault",
+      command: "memory",
+      args: ["init"],
+    });
+  }
+
+  // Phase B: Graphify hooks
+  const graphifyHookSteps: StepDefinition[] = [];
+
+  if (hasGraphify) {
+    graphifyHookSteps.push({
+      label: "Installing graphify git hooks",
+      command: "graphify",
+      args: ["hook", "install"],
+    });
+  }
+
+  // Phase D: AI integrations (graphify -> agent)
+  const integrationSteps: StepDefinition[] = [];
+
+  if (hasGraphify) {
+    for (const agent of selectedAgents) {
+      if (agent.graphifyPlatform) {
+        integrationSteps.push({
+          label: `Integrating graphify -> ${agent.graphifyPlatform}`,
+          command: "graphify",
+          args: [agent.graphifyPlatform, "install"],
+        });
+      }
+    }
+  }
+
+  return { standardToolSteps, graphifyHookSteps, integrationSteps };
+}
+
+// ─── Legacy Compatibility ────────────────────────────────────────────────────
+// The old `buildSetupSteps()` API used by existing tests.
+// Delegates to `buildSetupPlan()` with the original hardcoded agents.
+
+const LEGACY_AI_PLATFORMS = [
+  "codex",
+  "gemini",
+  "antigravity",
+  "claude",
+] as const;
+
+const LEGACY_CODE_REVIEW_GRAPH_PLATFORMS = [
+  "codex",
+  "gemini-cli",
+  "antigravity",
+  "claude",
+] as const;
+
+export const STANDARD_TOOL_STEP_COUNT =
+  LEGACY_CODE_REVIEW_GRAPH_PLATFORMS.length + 1;
+
+/**
+ * @deprecated Use `buildSetupPlan()` instead.
+ * Kept for backward compatibility with existing tests.
+ */
 export function buildSetupSteps(autoYes: boolean): StepDefinition[] {
   const reviewGraphYes = autoYes ? ["-y"] : [];
   const steps: StepDefinition[] = [];
 
-  for (const platform of CODE_REVIEW_GRAPH_PLATFORMS) {
+  for (const platform of LEGACY_CODE_REVIEW_GRAPH_PLATFORMS) {
     steps.push({
       label: `Initialising code-review-graph -> ${platform}`,
       command: "code-review-graph",
@@ -172,7 +284,7 @@ export function buildSetupSteps(autoYes: boolean): StepDefinition[] {
     }
   );
 
-  for (const platform of AI_PLATFORMS) {
+  for (const platform of LEGACY_AI_PLATFORMS) {
     steps.push({
       label: `Integrating graphify -> ${platform}`,
       command: "graphify",

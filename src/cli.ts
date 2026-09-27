@@ -6,23 +6,42 @@ import { Command } from "commander";
 import { execa } from "execa";
 import ora, { type Ora } from "ora";
 import pc from "picocolors";
-import { confirm } from "@inquirer/prompts";
+import { confirm, select, checkbox } from "@inquirer/prompts";
 import {
-  buildSetupSteps,
+  buildSetupPlan,
   GITATTRIBUTES_GROUPS,
   GITIGNORE_GROUPS,
   gitRepoStepResult,
   MANAGED_BLOCK_HEADER,
   mergeManagedBlock,
   shouldSetFailureExitCode,
-  STANDARD_TOOL_STEP_COUNT,
+  TOOL_REGISTRY,
+  defaultToolIds,
+  type SetupPlan,
   type StepDefinition,
   type StepResult,
 } from "./core.js";
+import {
+  AGENT_REGISTRY,
+  PRESETS,
+  DEFAULT_AGENT_ID,
+  resolveAgents,
+  allAgentIds,
+  findPreset,
+  type AgentDefinition,
+  type PresetName,
+} from "./agents.js";
+import {
+  loadConfig,
+  saveConfig,
+  buildConfig,
+  configPath,
+  type AiStackConfig,
+} from "./config.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -53,6 +72,18 @@ interface PreflightResult {
   stillMissing: string[];
   /** Whether auto-install was attempted. */
   installAttempted: boolean;
+}
+
+interface InitOptions {
+  yes?: boolean;
+  allowWarnings?: boolean;
+  dryRun?: boolean;
+  preset?: string;
+  agents?: string;
+  tools?: string;
+  reconfigure?: boolean;
+  verbose?: boolean;
+  quiet?: boolean;
 }
 
 // ─── Installable Tool Registry ───────────────────────────────────────────────
@@ -155,7 +186,12 @@ async function detectPythonPM(): Promise<PythonPM | null> {
  * Ensure the current working directory is inside a git repository.
  * If not, run `git init` to create one.
  */
-async function ensureGitRepo(): Promise<StepResult> {
+async function ensureGitRepo(dryRun: boolean): Promise<StepResult> {
+  if (dryRun) {
+    console.log(`  ${pc.dim("○")} Would check/init git repository`);
+    return { label: "Git repository", success: true };
+  }
+
   const spinner = ora({ text: "Checking for git repository…", color: "blue" }).start();
 
   try {
@@ -188,15 +224,19 @@ async function ensureGitRepo(): Promise<StepResult> {
  * Run a single setup step with a terminal spinner.
  * On failure the error is captured and the spinner shows a warning.
  */
-async function runStep(step: StepDefinition): Promise<StepResult> {
+async function runStep(step: StepDefinition, verbose: boolean): Promise<StepResult> {
   const spinner: Ora = ora({ text: step.label, color: "cyan" }).start();
 
   try {
-    await execa(step.command, step.args, {
+    const result = await execa(step.command, step.args, {
       cwd: process.cwd(),
-      stdout: "pipe",
-      stderr: "pipe",
+      stdout: verbose ? "inherit" : "pipe",
+      stderr: verbose ? "inherit" : "pipe",
     });
+
+    if (verbose && result.stdout) {
+      console.log(pc.dim(result.stdout));
+    }
 
     spinner.succeed(pc.green(step.label));
     return { label: step.label, success: true };
@@ -208,13 +248,26 @@ async function runStep(step: StepDefinition): Promise<StepResult> {
   }
 }
 
+/**
+ * Print a dry-run line for a step (no execution).
+ */
+function dryRunStep(step: StepDefinition): StepResult {
+  console.log(`  ${pc.dim("○")} Would run: ${pc.cyan(`${step.command} ${step.args.join(" ")}`)}`);
+  return { label: step.label, success: true };
+}
+
 // ─── Git Hygiene Functions ───────────────────────────────────────────────────
 
 /**
  * Ensure .gitignore contains all required entries.
  * Appends missing entries idempotently — never duplicates, never removes user entries.
  */
-function ensureGitignore(): StepResult {
+function ensureGitignore(dryRun: boolean): StepResult {
+  if (dryRun) {
+    console.log(`  ${pc.dim("○")} Would update .gitignore`);
+    return { label: ".gitignore", success: true };
+  }
+
   const filePath = join(process.cwd(), ".gitignore");
   const spinner = ora({ text: "Configuring .gitignore", color: "cyan" }).start();
 
@@ -251,7 +304,12 @@ function ensureGitignore(): StepResult {
  * Ensure .gitattributes contains all required entries.
  * Appends missing entries idempotently.
  */
-function ensureGitattributes(): StepResult {
+function ensureGitattributes(dryRun: boolean): StepResult {
+  if (dryRun) {
+    console.log(`  ${pc.dim("○")} Would update .gitattributes`);
+    return { label: ".gitattributes", success: true };
+  }
+
   const filePath = join(process.cwd(), ".gitattributes");
   const spinner = ora({ text: "Configuring .gitattributes", color: "cyan" }).start();
 
@@ -315,7 +373,7 @@ async function checkPrerequisites(): Promise<boolean> {
  * Scan for missing installable tools and offer to install them.
  * Returns structured result so the caller can decide whether to proceed.
  */
-async function preflightAndInstall(autoYes: boolean): Promise<PreflightResult> {
+async function preflightAndInstall(autoYes: boolean, quiet: boolean): Promise<PreflightResult> {
   const spinner = ora({ text: "Scanning for installed tools…", color: "blue" }).start();
 
   const pythonPM = await detectPythonPM();
@@ -332,21 +390,25 @@ async function preflightAndInstall(autoYes: boolean): Promise<PreflightResult> {
 
   spinner.stop();
 
-  // Show found tools
-  if (found.length > 0) {
-    console.log(`  ${pc.green("✔")} Found on PATH: ${pc.green(found.join(", "))}`);
-  }
+  if (!quiet) {
+    // Show found tools
+    if (found.length > 0) {
+      console.log(`  ${pc.green("✔")} Found on PATH: ${pc.green(found.join(", "))}`);
+    }
 
-  // Show Python package manager
-  if (pythonPM) {
-    console.log(`  ${pc.green("✔")} Python installer: ${pc.green(pythonPM)}`);
-  } else {
-    console.log(`  ${pc.yellow("⚠")} No Python package manager found (uv, pipx, or pip)`);
+    // Show Python package manager
+    if (pythonPM) {
+      console.log(`  ${pc.green("✔")} Python installer: ${pc.green(pythonPM)}`);
+    } else {
+      console.log(`  ${pc.yellow("⚠")} No Python package manager found (uv, pipx, or pip)`);
+    }
   }
 
   if (missing.length === 0) {
-    console.log();
-    console.log(pc.green(pc.bold("  All tools are already installed!")));
+    if (!quiet) {
+      console.log();
+      console.log(pc.green(pc.bold("  All tools are already installed!")));
+    }
     return { found, stillMissing: [], installAttempted: false };
   }
 
@@ -396,7 +458,7 @@ async function preflightAndInstall(autoYes: boolean): Promise<PreflightResult> {
       continue;
     }
 
-    await runStep(step);
+    await runStep(step, false);
   }
 
   // ── Re-verify installations ─────────────────────────────────────────────
@@ -426,13 +488,139 @@ async function preflightAndInstall(autoYes: boolean): Promise<PreflightResult> {
   return { found, stillMissing, installAttempted: true };
 }
 
+// ─── Interactive Selection ───────────────────────────────────────────────────
+
+/**
+ * Resolve which agents to configure — from CLI flags, config file, or interactive prompts.
+ */
+async function resolveAgentSelection(
+  opts: InitOptions,
+  savedConfig: AiStackConfig | null,
+): Promise<AgentDefinition[]> {
+  // 1. CLI --agents flag takes highest priority
+  if (opts.agents) {
+    const ids = opts.agents.split(",").map((s) => s.trim()).filter(Boolean);
+    const agents = resolveAgents(ids);
+    if (agents.length === 0) {
+      console.log(pc.yellow(`  ⚠  No valid agents found in: ${opts.agents}`));
+      console.log(pc.dim(`     Known agents: ${allAgentIds().join(", ")}`));
+      process.exitCode = 1;
+      return [];
+    }
+    return agents;
+  }
+
+  // 2. CLI --preset flag
+  if (opts.preset) {
+    const preset = findPreset(opts.preset);
+    if (!preset) {
+      console.log(pc.yellow(`  ⚠  Unknown preset: ${opts.preset}`));
+      console.log(pc.dim(`     Available: ${PRESETS.map((p) => p.name).join(", ")}`));
+      process.exitCode = 1;
+      return [];
+    }
+    return resolveAgents(preset.resolve());
+  }
+
+  // 3. Saved config (unless --reconfigure)
+  if (savedConfig && !opts.reconfigure) {
+    return resolveAgents(savedConfig.agents);
+  }
+
+  // 4. Auto-yes uses standard preset
+  if (opts.yes) {
+    const standard = findPreset("standard")!;
+    return resolveAgents(standard.resolve());
+  }
+
+  // 5. Interactive: preset selection → optional custom checkbox
+  console.log();
+  const presetName = await select<PresetName>({
+    message: "Select an agent preset:",
+    choices: PRESETS.map((p) => {
+      const agentList = p.name === "custom"
+        ? ""
+        : ` (${p.resolve().join(", ")})`;
+      return {
+        value: p.name,
+        name: `${p.displayName} — ${p.description}${agentList}`,
+      };
+    }),
+    default: "standard" as PresetName,
+  });
+
+  if (presetName === "custom") {
+    const standardIds = findPreset("standard")!.resolve();
+    const selectedIds = await checkbox<string>({
+      message: "Select agents to configure:",
+      choices: AGENT_REGISTRY.map((a) => ({
+        value: a.id,
+        name: `${a.displayName}${a.inStandardPreset ? pc.dim(" (standard)") : ""}`,
+        checked: standardIds.includes(a.id),
+      })),
+    });
+
+    if (selectedIds.length === 0) {
+      console.log(pc.yellow("  ⚠  No agents selected. Using standard preset."));
+      return resolveAgents(standardIds);
+    }
+
+    return resolveAgents(selectedIds);
+  }
+
+  const preset = findPreset(presetName)!;
+  return resolveAgents(preset.resolve());
+}
+
+/**
+ * Resolve which tools to configure — from CLI flags, config file, or interactive prompts.
+ */
+async function resolveToolSelection(
+  opts: InitOptions,
+  savedConfig: AiStackConfig | null,
+): Promise<string[]> {
+  // 1. CLI --tools flag
+  if (opts.tools) {
+    const ids = opts.tools.split(",").map((s) => s.trim()).filter(Boolean);
+    const valid = ids.filter((id) => TOOL_REGISTRY.some((t) => t.id === id));
+    if (valid.length === 0) {
+      console.log(pc.yellow(`  ⚠  No valid tools found in: ${opts.tools}`));
+      console.log(pc.dim(`     Known tools: ${TOOL_REGISTRY.map((t) => t.id).join(", ")}`));
+      return defaultToolIds();
+    }
+    return valid;
+  }
+
+  // 2. Saved config (unless --reconfigure)
+  if (savedConfig && !opts.reconfigure) {
+    return savedConfig.tools;
+  }
+
+  // 3. Auto-yes uses all defaults
+  if (opts.yes) {
+    return defaultToolIds();
+  }
+
+  // 4. Interactive: checkbox
+  const selectedIds = await checkbox<string>({
+    message: "Select tools to configure:",
+    choices: TOOL_REGISTRY.map((t) => ({
+      value: t.id,
+      name: `${t.displayName} — ${pc.dim(t.description)}`,
+      checked: t.defaultEnabled,
+    })),
+  });
+
+  return selectedIds.length > 0 ? selectedIds : defaultToolIds();
+}
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 /**
  * Print a summary of step results.
  * Returns the number of failed steps (used to set exit code).
  */
-function printSummary(results: StepResult[]): number {
+function printSummary(results: StepResult[], quiet: boolean): number {
   const passed = results.filter((r) => r.success).length;
   const failed = results.filter((r) => !r.success).length;
 
@@ -463,25 +651,34 @@ function printSummary(results: StepResult[]): number {
 
 // ─── Init Command ────────────────────────────────────────────────────────────
 
-async function initCommand(opts: { yes?: boolean; allowWarnings?: boolean }): Promise<void> {
+async function initCommand(opts: InitOptions): Promise<void> {
   const autoYes = opts.yes ?? false;
   const allowWarnings = opts.allowWarnings ?? false;
+  const dryRun = opts.dryRun ?? false;
+  const reconfigure = opts.reconfigure ?? false;
+  const verbose = opts.verbose ?? false;
+  const quiet = opts.quiet ?? false;
 
-  console.log();
-  console.log(
-    pc.bold(pc.cyan("  ╔══════════════════════════════════════╗"))
-  );
-  console.log(
-    pc.bold(pc.cyan("  ║        ai-stack  ·  project init     ║"))
-  );
-  console.log(
-    pc.bold(pc.cyan("  ╚══════════════════════════════════════╝"))
-  );
-  console.log();
-  console.log(
-    `  ${pc.dim("Working directory:")} ${pc.white(process.cwd())}`
-  );
-  console.log();
+  if (!quiet) {
+    console.log();
+    console.log(
+      pc.bold(pc.cyan("  ╔══════════════════════════════════════╗"))
+    );
+    console.log(
+      pc.bold(pc.cyan("  ║        ai-stack  ·  project init     ║"))
+    );
+    console.log(
+      pc.bold(pc.cyan("  ╚══════════════════════════════════════╝"))
+    );
+    console.log();
+    console.log(
+      `  ${pc.dim("Working directory:")} ${pc.white(process.cwd())}`
+    );
+    if (dryRun) {
+      console.log(`  ${pc.magenta(pc.bold("DRY RUN"))} — no changes will be made`);
+    }
+    console.log();
+  }
 
   // ── Prerequisites ───────────────────────────────────────────────────────
   if (!(await checkPrerequisites())) {
@@ -490,81 +687,155 @@ async function initCommand(opts: { yes?: boolean; allowWarnings?: boolean }): Pr
   }
 
   // ── Pre-flight & Auto-Install ───────────────────────────────────────────
-  const preflight = await preflightAndInstall(autoYes);
+  if (!dryRun) {
+    const preflight = await preflightAndInstall(autoYes, quiet);
 
-  // Abort if critical tools are still missing after install attempt
-  if (preflight.stillMissing.length > 0 && preflight.installAttempted) {
-    console.log();
-    console.log(
-      pc.red(
-        pc.bold("  ✘  Cannot proceed — required tools are still missing after install attempt:")
-      )
-    );
-    for (const name of preflight.stillMissing) {
-      console.log(pc.red(`     • ${name}`));
+    // Abort if critical tools are still missing after install attempt
+    if (preflight.stillMissing.length > 0 && preflight.installAttempted) {
+      console.log();
+      console.log(
+        pc.red(
+          pc.bold("  ✘  Cannot proceed — required tools are still missing after install attempt:")
+        )
+      );
+      for (const name of preflight.stillMissing) {
+        console.log(pc.red(`     • ${name}`));
+      }
+      console.log();
+      console.log(
+        pc.dim("  Fix your PATH or install the tools manually, then re-run `ai-stack init`.")
+      );
+      console.log();
+      process.exitCode = 1;
+      return;
     }
-    console.log();
-    console.log(
-      pc.dim("  Fix your PATH or install the tools manually, then re-run `ai-stack init`.")
-    );
-    console.log();
-    process.exitCode = 1;
-    return;
+
+    // If user declined install and tools are missing, warn but continue
+    // (the individual steps will fail gracefully with warnings)
+    if (preflight.stillMissing.length > 0 && !preflight.installAttempted) {
+      console.log();
+      console.log(
+        pc.yellow(
+          pc.bold("  ⚠  Continuing with missing tools — some steps will fail.")
+        )
+      );
+      console.log();
+    }
   }
 
-  // If user declined install and tools are missing, warn but continue
-  // (the individual steps will fail gracefully with warnings)
-  if (preflight.stillMissing.length > 0 && !preflight.installAttempted) {
-    console.log();
-    console.log(
-      pc.yellow(
-        pc.bold("  ⚠  Continuing with missing tools — some steps will fail.")
-      )
-    );
-    console.log();
+  // ── Load saved config ──────────────────────────────────────────────────
+  let savedConfig: AiStackConfig | null = null;
+  if (!reconfigure) {
+    savedConfig = loadConfig(process.cwd());
+    if (savedConfig && !quiet && !autoYes) {
+      console.log();
+      console.log(`  ${pc.green("✔")} Found saved config: ${pc.dim(configPath(process.cwd()))}`);
+      console.log(`    Agents: ${pc.cyan(savedConfig.agents.join(", "))}`);
+      console.log(`    Tools:  ${pc.cyan(savedConfig.tools.join(", "))}`);
+
+      const useSaved = await confirm({
+        message: "Use saved configuration?",
+        default: true,
+      });
+
+      if (!useSaved) {
+        savedConfig = null;
+      }
+    }
   }
 
-  // ── Execute setup steps ─────────────────────────────────────────────────
-  const steps = buildSetupSteps(autoYes);
+  // ── Resolve selections ──────────────────────────────────────────────────
+  const selectedAgents = await resolveAgentSelection(opts, savedConfig);
+  if (selectedAgents.length === 0) return;
+
+  const selectedToolIds = await resolveToolSelection(opts, savedConfig);
+
+  if (!quiet) {
+    console.log();
+    console.log(`  ${pc.blue("Agents:")} ${selectedAgents.map((a) => pc.cyan(a.displayName)).join(", ")}`);
+    console.log(`  ${pc.blue("Tools:")}  ${selectedToolIds.map((t) => pc.cyan(t)).join(", ")}`);
+  }
+
+  // ── Offer to save config ───────────────────────────────────────────────
+  if (!savedConfig && !dryRun) {
+    let shouldSave = autoYes;
+    if (!autoYes && !quiet) {
+      shouldSave = await confirm({
+        message: "Save these selections to .ai-stackrc.json for next time?",
+        default: true,
+      });
+    }
+
+    if (shouldSave) {
+      const config = buildConfig(
+        selectedAgents.map((a) => a.id),
+        selectedToolIds,
+        DEFAULT_AGENT_ID,
+      );
+      saveConfig(process.cwd(), config);
+      if (!quiet) {
+        console.log(`  ${pc.green("✔")} Saved ${pc.dim(configPath(process.cwd()))}`);
+      }
+    }
+  }
+
+  // ── Build setup plan ───────────────────────────────────────────────────
+  const plan = buildSetupPlan({
+    autoYes,
+    selectedAgents,
+    selectedTools: selectedToolIds,
+  });
+
   const results: StepResult[] = [];
 
-  // Phase A header
-  console.log();
-  console.log(pc.bold(pc.blue("  Phase A: Standard Tools")));
-  console.log(pc.dim("  ────────────────────────────────────"));
-  for (const step of steps.slice(0, STANDARD_TOOL_STEP_COUNT)) {
-    results.push(await runStep(step));
+  // ── Phase A: Standard Tools ────────────────────────────────────────────
+  if (plan.standardToolSteps.length > 0) {
+    if (!quiet) {
+      console.log();
+      console.log(pc.bold(pc.blue(`  Phase A: Standard Tools${dryRun ? " (DRY RUN)" : ""}`)));
+      console.log(pc.dim("  ────────────────────────────────────"));
+    }
+    for (const step of plan.standardToolSteps) {
+      results.push(dryRun ? dryRunStep(step) : await runStep(step, verbose));
+    }
   }
 
-  // Phase B header
-  console.log();
-  console.log(pc.bold(pc.blue("  Phase B: Graphify Hooks")));
-  console.log(pc.dim("  ────────────────────────────────────"));
-  results.push(await ensureGitRepo());
-  for (const step of steps.slice(
-    STANDARD_TOOL_STEP_COUNT,
-    STANDARD_TOOL_STEP_COUNT + 1
-  )) {
-    results.push(await runStep(step));
+  // ── Phase B: Graphify Hooks ────────────────────────────────────────────
+  if (plan.graphifyHookSteps.length > 0) {
+    if (!quiet) {
+      console.log();
+      console.log(pc.bold(pc.blue(`  Phase B: Graphify Hooks${dryRun ? " (DRY RUN)" : ""}`)));
+      console.log(pc.dim("  ────────────────────────────────────"));
+    }
+    results.push(await ensureGitRepo(dryRun));
+    for (const step of plan.graphifyHookSteps) {
+      results.push(dryRun ? dryRunStep(step) : await runStep(step, verbose));
+    }
   }
 
-  // Phase C: Git Hygiene
-  console.log();
-  console.log(pc.bold(pc.blue("  Phase C: Git Hygiene")));
-  console.log(pc.dim("  ────────────────────────────────────"));
-  results.push(ensureGitignore());
-  results.push(ensureGitattributes());
+  // ── Phase C: Git Hygiene ───────────────────────────────────────────────
+  if (!quiet) {
+    console.log();
+    console.log(pc.bold(pc.blue(`  Phase C: Git Hygiene${dryRun ? " (DRY RUN)" : ""}`)));
+    console.log(pc.dim("  ────────────────────────────────────"));
+  }
+  results.push(ensureGitignore(dryRun));
+  results.push(ensureGitattributes(dryRun));
 
-  // Phase D: AI Integrations
-  console.log();
-  console.log(pc.bold(pc.blue("  Phase D: AI Integrations")));
-  console.log(pc.dim("  ────────────────────────────────────"));
-  for (const step of steps.slice(STANDARD_TOOL_STEP_COUNT + 1)) {
-    results.push(await runStep(step));
+  // ── Phase D: AI Integrations ───────────────────────────────────────────
+  if (plan.integrationSteps.length > 0) {
+    if (!quiet) {
+      console.log();
+      console.log(pc.bold(pc.blue(`  Phase D: AI Integrations${dryRun ? " (DRY RUN)" : ""}`)));
+      console.log(pc.dim("  ────────────────────────────────────"));
+    }
+    for (const step of plan.integrationSteps) {
+      results.push(dryRun ? dryRunStep(step) : await runStep(step, verbose));
+    }
   }
 
   // ── Summary & Exit Code ─────────────────────────────────────────────────
-  const failedCount = printSummary(results);
+  const failedCount = printSummary(results, quiet);
 
   if (shouldSetFailureExitCode(failedCount, allowWarnings)) {
     process.exitCode = 1;
@@ -589,6 +860,13 @@ program
   )
   .option("-y, --yes", "Skip all prompts — auto-install missing tools globally")
   .option("--allow-warnings", "Exit 0 even if some steps fail (default: exit 1 on failures)")
+  .option("--dry-run", "Show what would happen without making changes")
+  .option("--preset <name>", "Use a preset: standard, minimal, all (skips agent prompt)")
+  .option("--agents <list>", "Comma-separated agent IDs (overrides preset)")
+  .option("--tools <list>", "Comma-separated tool IDs")
+  .option("--reconfigure", "Ignore saved .ai-stackrc.json and re-prompt")
+  .option("--verbose", "Show command output for each step")
+  .option("--quiet", "Minimal output — only errors and summary")
   .action(initCommand);
 
 program.parse(process.argv);

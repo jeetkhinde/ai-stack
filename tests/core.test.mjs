@@ -144,6 +144,12 @@ test("setup contains only the supported standard tools", () => {
     false
   );
   assert.deepEqual(ignored, [
+    ".env",
+    ".env.*",
+    "*.log",
+    ".DS_Store",
+    "node_modules/",
+    "coverage/",
     ".code-review-graph/",
     "graphify-out/",
     ".memory/",

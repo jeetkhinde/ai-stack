@@ -8,6 +8,7 @@ import {
   gitRepoStepResult,
   mergeManagedBlock,
   shouldSetFailureExitCode,
+  STANDARD_TOOL_STEP_COUNT,
 } from "../dist/core.js";
 
 const TEST_GROUPS = [
@@ -67,20 +68,36 @@ test("mergeManagedBlock is idempotent", () => {
 
 test("buildSetupSteps makes code-review-graph non-interactive with --yes", () => {
   const steps = buildSetupSteps(true);
-  const step = steps.find((candidate) =>
-    candidate.label.includes("code-review-graph")
+  const graphSteps = steps.filter((candidate) =>
+    candidate.label.startsWith("Initialising code-review-graph -> ")
   );
 
-  assert.deepEqual(step?.args, ["init", "-y"]);
+  assert.deepEqual(
+    graphSteps.map((step) => step.args),
+    [
+      ["init", "--platform", "codex", "-y"],
+      ["init", "--platform", "gemini-cli", "-y"],
+      ["init", "--platform", "antigravity", "-y"],
+      ["init", "--platform", "claude", "-y"],
+    ]
+  );
 });
 
 test("buildSetupSteps keeps code-review-graph interactive by default", () => {
   const steps = buildSetupSteps(false);
-  const step = steps.find((candidate) =>
-    candidate.label.includes("code-review-graph")
+  const graphSteps = steps.filter((candidate) =>
+    candidate.label.startsWith("Initialising code-review-graph -> ")
   );
 
-  assert.deepEqual(step?.args, ["init"]);
+  assert.deepEqual(
+    graphSteps.map((step) => step.args),
+    [
+      ["init", "--platform", "codex"],
+      ["init", "--platform", "gemini-cli"],
+      ["init", "--platform", "antigravity"],
+      ["init", "--platform", "claude"],
+    ]
+  );
 });
 
 test("gitRepoStepResult reports initialization failure", () => {
@@ -111,8 +128,20 @@ test("setup contains only the supported standard tools", () => {
   const ignored = GITIGNORE_GROUPS.flatMap((group) => group.entries);
 
   assert.deepEqual(
-    steps.slice(0, 4).map((step) => step.command),
-    ["codebase-memory-mcp", "npx", "code-review-graph", "memory"]
+    steps.slice(0, STANDARD_TOOL_STEP_COUNT).map((step) => step.command),
+    ["code-review-graph", "code-review-graph", "code-review-graph", "code-review-graph", "memory"]
+  );
+  assert.equal(
+    steps.some((step) =>
+      step.command === "codebase-memory-mcp" && step.args.includes("install")
+    ),
+    false
+  );
+  assert.equal(
+    steps.some((step) =>
+      step.command === "npx" && step.args.includes("antigravity-superpowers")
+    ),
+    false
   );
   assert.deepEqual(ignored, [
     ".code-review-graph/",

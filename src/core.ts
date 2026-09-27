@@ -30,6 +30,16 @@ const AI_PLATFORMS = [
   "claude",
 ] as const;
 
+const CODE_REVIEW_GRAPH_PLATFORMS = [
+  "codex",
+  "gemini-cli",
+  "antigravity",
+  "claude",
+] as const;
+
+export const STANDARD_TOOL_STEP_COUNT =
+  CODE_REVIEW_GRAPH_PLATFORMS.length + 1;
+
 export const MANAGED_BLOCK_HEADER =
   "# === ai-stack managed - do not remove this block ===";
 
@@ -138,24 +148,18 @@ export function shouldSetFailureExitCode(
 }
 
 export function buildSetupSteps(autoYes: boolean): StepDefinition[] {
-  const superForce = autoYes ? ["--force"] : [];
   const reviewGraphYes = autoYes ? ["-y"] : [];
-  const steps: StepDefinition[] = [
-    {
-      label: "Installing codebase-memory-mcp",
-      command: "codebase-memory-mcp",
-      args: ["install", "-y"],
-    },
-    {
-      label: "Initialising superpowers",
-      command: "npx",
-      args: ["-y", "antigravity-superpowers", "init", ...superForce],
-    },
-    {
-      label: "Initialising code-review-graph",
+  const steps: StepDefinition[] = [];
+
+  for (const platform of CODE_REVIEW_GRAPH_PLATFORMS) {
+    steps.push({
+      label: `Initialising code-review-graph -> ${platform}`,
       command: "code-review-graph",
-      args: ["init", ...reviewGraphYes],
-    },
+      args: ["init", "--platform", platform, ...reviewGraphYes],
+    });
+  }
+
+  steps.push(
     {
       label: "Initialising echovault",
       command: "memory",
@@ -165,8 +169,8 @@ export function buildSetupSteps(autoYes: boolean): StepDefinition[] {
       label: "Installing graphify git hooks",
       command: "graphify",
       args: ["hook", "install"],
-    },
-  ];
+    }
+  );
 
   for (const platform of AI_PLATFORMS) {
     steps.push({

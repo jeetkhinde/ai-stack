@@ -1,6 +1,6 @@
 {
   "name": "ai-stack",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CLI tool to bootstrap AI and development workflow tools for any new project.",
   "type": "module",
   "bin": {

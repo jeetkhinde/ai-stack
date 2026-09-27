@@ -15,13 +15,14 @@ import {
   MANAGED_BLOCK_HEADER,
   mergeManagedBlock,
   shouldSetFailureExitCode,
+  STANDARD_TOOL_STEP_COUNT,
   type StepDefinition,
   type StepResult,
 } from "./core.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -531,7 +532,7 @@ async function initCommand(opts: { yes?: boolean; allowWarnings?: boolean }): Pr
   console.log();
   console.log(pc.bold(pc.blue("  Phase A: Standard Tools")));
   console.log(pc.dim("  ────────────────────────────────────"));
-  for (const step of steps.slice(0, 4)) {
+  for (const step of steps.slice(0, STANDARD_TOOL_STEP_COUNT)) {
     results.push(await runStep(step));
   }
 
@@ -540,7 +541,10 @@ async function initCommand(opts: { yes?: boolean; allowWarnings?: boolean }): Pr
   console.log(pc.bold(pc.blue("  Phase B: Graphify Hooks")));
   console.log(pc.dim("  ────────────────────────────────────"));
   results.push(await ensureGitRepo());
-  for (const step of steps.slice(4, 5)) {
+  for (const step of steps.slice(
+    STANDARD_TOOL_STEP_COUNT,
+    STANDARD_TOOL_STEP_COUNT + 1
+  )) {
     results.push(await runStep(step));
   }
 
@@ -555,7 +559,7 @@ async function initCommand(opts: { yes?: boolean; allowWarnings?: boolean }): Pr
   console.log();
   console.log(pc.bold(pc.blue("  Phase D: AI Integrations")));
   console.log(pc.dim("  ────────────────────────────────────"));
-  for (const step of steps.slice(5)) {
+  for (const step of steps.slice(STANDARD_TOOL_STEP_COUNT + 1)) {
     results.push(await runStep(step));
   }
 

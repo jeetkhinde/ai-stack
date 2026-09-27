@@ -7,7 +7,7 @@ CLI tool to bootstrap AI and development workflow tools for any new project. One
 `ai-stack init` runs a sequenced setup that:
 
 1. **Detects & installs missing tools** — scans your PATH, offers to auto-install anything missing
-2. **Phase A — Standard Tools** — configures codebase-memory-mcp, superpowers, code-review-graph, and echovault
+2. **Phase A — Standard Tools** — configures code-review-graph and echovault
 3. **Phase B — Graphify Hooks** — ensures a git repo exists (auto-inits if needed), installs graphify hooks
 4. **Phase C — Git Hygiene** — ignores disposable local indexes and marks generated graph output
 5. **Phase D — AI Integrations** — registers graphify with Codex, Gemini, Antigravity, and Claude
@@ -62,7 +62,6 @@ These must already be on your PATH:
 | [code-review-graph](https://github.com/tirth8205/code-review-graph) | `code-review-graph` | `uv` / `pipx` / `pip` |
 | [graphify](https://github.com/safishamsi/graphify) | `graphify` | `graphifyy` via `uv` / `pipx` / `pip` |
 | [echovault](https://github.com/mraza007/echovault) | `memory` | `uv` / `pipx` / `pip` |
-| [superpowers](https://github.com/obra/superpowers) | via `npx` | `npx antigravity-superpowers init` |
 
 ## Tech Stack
 
